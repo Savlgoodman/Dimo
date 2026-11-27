@@ -23,7 +23,10 @@ import {
   WorkspaceDockviewTab,
   panelComponents,
 } from '@/components/layout/panels/PanelRegistry';
-import { WorkspaceActivityRail } from '@/components/layout/WorkspaceActivityRail';
+import {
+  WorkspaceSidebar,
+  WorkspaceSidebarSash,
+} from '@/components/layout/WorkspaceSidebar';
 import { WorkspaceTabAddMenu } from '@/components/layout/panels/WorkspaceTabAddMenu';
 import {
   useOptionalPanelActionsContext,
@@ -95,6 +98,14 @@ import {
 } from '@/utils/dockviewGroupPolicy';
 import '@/styles/dockview-ayu.css';
 import { useWorkspaceStageStyle } from '@/lib/workspaceStageStyle';
+import {
+  clampWorkspaceSidebarWidth,
+  extractSidebarLayout,
+  readWorkspaceSidebarState,
+  removeSidebarPanels,
+  writeWorkspaceSidebarState,
+  type WorkspaceSidebarState,
+} from '@/lib/workspaceSidebarState';
 import { useCanvasToTabsHandoff } from '@/components/layout/useCanvasToTabsHandoff';
 import { useTabsToCanvasHandoff } from '@/components/layout/useTabsToCanvasHandoff';
 import { useDockviewPanelActionsBinding } from '@/hooks/useDockviewPanelActionsBinding';
@@ -220,8 +231,12 @@ export function IDELayout({
   );
   const { worktrees } = useProjectWorktrees(projectId);
   const serializedLayout = useLayoutStore((state) => state.serializedLayout);
+  const isFileTreeVisible = useLayoutStore((state) => state.isFileTreeVisible);
   const setSerializedLayout = useLayoutStore(
     (state) => state.setSerializedLayout
+  );
+  const setFileTreeVisible = useLayoutStore(
+    (state) => state.setFileTreeVisible
   );
   const isRightPanelVisible = useLayoutStore(
     (state) => state.isRightPanelVisible
@@ -252,6 +267,42 @@ export function IDELayout({
     collaborationEnabled: Boolean(config?.multi_agent_enabled),
   });
   const hasProject = Boolean(projectId);
+  const [workspaceSidebarState, setWorkspaceSidebarState] =
+    useState<WorkspaceSidebarState>(() =>
+      readWorkspaceSidebarState(projectKey, isFileTreeVisible)
+    );
+  const workspaceSidebarStateRef = useRef(workspaceSidebarState);
+  workspaceSidebarStateRef.current = workspaceSidebarState;
+  const legacySidebarLayout = useMemo(
+    () => extractSidebarLayout(serializedLayout),
+    [serializedLayout]
+  );
+  const sidebarInitialLayout =
+    workspaceSidebarState.layout ?? legacySidebarLayout;
+  const updateWorkspaceSidebarState = useCallback(
+    (patch: Partial<WorkspaceSidebarState>) => {
+      setWorkspaceSidebarState((current) => {
+        const next = { ...current, ...patch };
+        writeWorkspaceSidebarState(projectKey, next);
+        return next;
+      });
+    },
+    [projectKey]
+  );
+  const updateWorkspaceSidebarWidth = useCallback(
+    (width: number) => {
+      const key =
+        workspaceSidebarStateRef.current.side === 'left'
+          ? 'leftWidth'
+          : 'rightWidth';
+      updateWorkspaceSidebarState({ [key]: clampWorkspaceSidebarWidth(width) });
+    },
+    [updateWorkspaceSidebarState]
+  );
+  useEffect(() => {
+    const next = readWorkspaceSidebarState(projectKey, isFileTreeVisible);
+    setWorkspaceSidebarState(next);
+  }, [isFileTreeVisible, projectKey]);
   const [isDockviewMounted, setIsDockviewMounted] = useState(
     () => hasProject && effectiveActiveTab === 'workspace'
   );
@@ -340,7 +391,11 @@ export function IDELayout({
     return element;
   });
 
-  const { setDockviewApi } = usePanelActionsContext();
+  const {
+    setDockviewApi,
+    setSidebarDockviewApi,
+    setWorkspaceSidebarController,
+  } = usePanelActionsContext();
   const [readyDockviewApi, setReadyDockviewApi] = useState<DockviewApi | null>(
     null
   );
@@ -348,6 +403,45 @@ export function IDELayout({
     isLayoutScopeReady ? readyDockviewApi : null,
     setDockviewApi
   );
+  const disposeWorkspaceSidebar = useCallback(
+    () => setSidebarDockviewApi(null),
+    [setSidebarDockviewApi]
+  );
+  useEffect(() => {
+    setWorkspaceSidebarController({
+      isVisible: () => workspaceSidebarStateRef.current.visible,
+      setVisible: (visible) => {
+        updateWorkspaceSidebarState({ visible });
+        setFileTreeVisible(visible);
+      },
+      getSide: () => workspaceSidebarStateRef.current.side,
+      toggleSide: () =>
+        updateWorkspaceSidebarState({
+          side:
+            workspaceSidebarStateRef.current.side === 'left' ? 'right' : 'left',
+        }),
+    });
+    return () => setWorkspaceSidebarController(null);
+  }, [
+    setFileTreeVisible,
+    setWorkspaceSidebarController,
+    updateWorkspaceSidebarState,
+  ]);
+
+  useEffect(() => {
+    if (workspaceSidebarState.layout || !legacySidebarLayout) return;
+    updateWorkspaceSidebarState({ layout: legacySidebarLayout });
+  }, [
+    legacySidebarLayout,
+    updateWorkspaceSidebarState,
+    workspaceSidebarState.layout,
+  ]);
+
+  useEffect(() => {
+    if (hasProject) return;
+    setSidebarDockviewApi(null);
+  }, [hasProject, setSidebarDockviewApi]);
+
   if (!isLayoutScopeReady && apiRef.current !== null) {
     apiRef.current = null;
   }
@@ -493,7 +587,7 @@ export function IDELayout({
         }
       }
 
-      buildDefaultLayout(api);
+      buildDefaultLayout(api, { includeSidebar: false });
 
       const currentArrangement = getLayoutArrangement();
       appliedArrangementRef.current = currentArrangement;
@@ -560,6 +654,7 @@ export function IDELayout({
         effectiveActiveTab,
         effectiveWorkspaceId,
         terminalVisibleBeforeKanbanRef,
+        includeSidebar: false,
       });
     },
     [effectiveActiveTab, effectiveWorkspaceId]
@@ -664,9 +759,14 @@ export function IDELayout({
       setDockviewApi(api);
 
       const layout = serializedLayoutRef.current;
+      const workspaceLayout = removeSidebarPanels(layout);
+      const legacySidebar = extractSidebarLayout(layout);
+      if (legacySidebar && !workspaceSidebarStateRef.current.layout) {
+        updateWorkspaceSidebarState({ layout: legacySidebar });
+      }
       const currentArrangement = getLayoutArrangement();
       appliedArrangementRef.current = currentArrangement;
-      if (layout) {
+      if (workspaceLayout) {
         try {
           // A layout already matching the arrangement restores VERBATIM — the
           // transform re-synthesizes the grid and loses user-dragged widths
@@ -674,10 +774,13 @@ export function IDELayout({
           // pre-session-group migration or an arrangement change since the
           // layout was persisted.
           api.fromJSON(
-            serializedLayoutMatchesArrangement(layout, currentArrangement)
-              ? layout
+            serializedLayoutMatchesArrangement(
+              workspaceLayout,
+              currentArrangement
+            )
+              ? workspaceLayout
               : arrangeSerializedLayout(
-                  layout,
+                  workspaceLayout,
                   currentArrangement,
                   buildArrangeOptions()
                 )
@@ -691,7 +794,7 @@ export function IDELayout({
           rebuildDefaultLayout(api, false);
         }
       } else {
-        buildDefaultLayout(api);
+        buildDefaultLayout(api, { includeSidebar: false });
         if (!isDefaultArrangement(currentArrangement)) {
           applyArrangement(api, currentArrangement);
         }
@@ -704,6 +807,11 @@ export function IDELayout({
 
       enforceTabVisibilityRef.current(api);
       closeEmptyTabBarGroups(api);
+      try {
+        setSerializedLayout(api.toJSON());
+      } catch {
+        // Ignore serialization failures during initial restore.
+      }
       setReadyDockviewApi(api);
 
       dockviewListenersCleanupRef.current = attachDockviewWorkspaceListeners(
@@ -731,6 +839,7 @@ export function IDELayout({
       registerDndGuard,
       setDockviewApi,
       setRightPanelWidth,
+      updateWorkspaceSidebarState,
       setSerializedLayout,
     ]
   );
@@ -1019,22 +1128,56 @@ export function IDELayout({
     [canvasStageInsets]
   );
 
+  const showWorkspaceSidebar =
+    hasProject &&
+    (effectiveActiveTab === 'workspace' || effectiveActiveTab === 'kanban');
+  const workspaceSidebar = showWorkspaceSidebar ? (
+    <WorkspaceSidebar
+      key={projectKey}
+      side={workspaceSidebarState.side}
+      width={
+        workspaceSidebarState.side === 'left'
+          ? workspaceSidebarState.leftWidth
+          : workspaceSidebarState.rightWidth
+      }
+      visible={workspaceSidebarState.visible}
+      mode={effectiveActiveTab === 'kanban' ? 'kanban' : 'workspace'}
+      isEditorAreaVisible={isEditorAreaVisible}
+      initialLayout={sidebarInitialLayout}
+      onToggleEditorArea={toggleEditorArea}
+      onReady={setSidebarDockviewApi}
+      onDispose={disposeWorkspaceSidebar}
+      onLayoutChange={(layout) => updateWorkspaceSidebarState({ layout })}
+    />
+  ) : null;
+  const workspaceStageSidebarSide =
+    showWorkspaceSidebar && workspaceSidebarState.visible
+      ? workspaceSidebarState.side
+      : 'none';
+  const workspaceSidebarSash = showWorkspaceSidebar ? (
+    <WorkspaceSidebarSash
+      side={workspaceSidebarState.side}
+      width={
+        workspaceSidebarState.side === 'left'
+          ? workspaceSidebarState.leftWidth
+          : workspaceSidebarState.rightWidth
+      }
+      visible={workspaceSidebarState.visible}
+      onWidthChange={updateWorkspaceSidebarWidth}
+    />
+  ) : null;
+
   const layoutBody = (
-    <div className="flex min-h-0 flex-1">
-      {hasProject &&
-      (effectiveActiveTab === 'workspace' ||
-        effectiveActiveTab === 'kanban') ? (
-        <WorkspaceActivityRail
-          mode={effectiveActiveTab === 'kanban' ? 'kanban' : 'workspace'}
-          isEditorAreaVisible={isEditorAreaVisible}
-          onToggleEditorArea={toggleEditorArea}
-        />
-      ) : null}
+    <div
+      className={`workspace-layout-row workspace-layout-row-${workspaceSidebarState.side} flex min-h-0 flex-1`}
+    >
+      {workspaceSidebarState.side === 'left' ? workspaceSidebar : null}
+      {workspaceSidebarState.side === 'left' ? workspaceSidebarSash : null}
 
       <RightPanelSlotContext.Provider value={sessionPlacement}>
         <div
           ref={dockviewRootRef}
-          className="workspace-stage-host relative flex min-h-0 flex-1 min-w-0 flex-col"
+          className={`workspace-stage-host workspace-stage-host-sidebar-${workspaceStageSidebarSide} relative flex min-h-0 flex-1 min-w-0 flex-col`}
           data-canvas-stage-active={isWorkspaceCanvasMode ? 'true' : undefined}
         >
           <MobileDeviceConnectBanner />
@@ -1066,7 +1209,10 @@ export function IDELayout({
                   className="dockview-theme-light dockview-theme-ayu"
                   disableAutoResizing={true}
                   disableFloatingGroups={true}
-                  dndEdges={false}
+                  dndEdges={{
+                    activationSize: { type: 'percentage', value: 30 },
+                    size: { type: 'percentage', value: 20 },
+                  }}
                 />
               </div>
             </div>
@@ -1169,6 +1315,9 @@ export function IDELayout({
           ) : null}
         </div>
       </RightPanelSlotContext.Provider>
+
+      {workspaceSidebarState.side === 'right' ? workspaceSidebarSash : null}
+      {workspaceSidebarState.side === 'right' ? workspaceSidebar : null}
     </div>
   );
 

@@ -262,7 +262,11 @@ export function normalizeGroupIds(api: DockviewApi): void {
   syncWorkspaceOpenSessionIdsFromDockview(api);
 }
 
-export function buildDefaultLayout(api: DockviewApi): void {
+export function buildDefaultLayout(
+  api: DockviewApi,
+  options: { includeSidebar?: boolean } = {}
+): void {
+  const includeSidebar = options.includeSidebar ?? true;
   const welcomePanel = api.addPanel({
     id: PANEL_IDS.WELCOME,
     component: PANEL_IDS.WELCOME,
@@ -276,27 +280,31 @@ export function buildDefaultLayout(api: DockviewApi): void {
     'editor'
   );
 
-  const leftGroup = api.addGroup({
-    id: GROUP_IDS.LEFT,
-    referencePanel: welcomePanel,
-    direction: 'left',
-    hideHeader: true,
-    constraints: { minimumWidth: IDE_LAYOUT_SIZING.LEFT_PANEL_MIN_WIDTH },
-    initialWidth: defaultDockWidth(api.width),
-  });
-  setDockviewGroupRole(leftGroup, 'left');
+  const leftGroup = includeSidebar
+    ? api.addGroup({
+        id: GROUP_IDS.LEFT,
+        referencePanel: welcomePanel,
+        direction: 'left',
+        hideHeader: true,
+        constraints: { minimumWidth: IDE_LAYOUT_SIZING.LEFT_PANEL_MIN_WIDTH },
+        initialWidth: defaultDockWidth(api.width),
+      })
+    : undefined;
+  if (leftGroup) {
+    setDockviewGroupRole(leftGroup, 'left');
 
-  const defaultLeftPanelId = getDefaultActivityRailPanelId();
-  api.addPanel({
-    id: defaultLeftPanelId,
-    component: defaultLeftPanelId,
-    title: ACTIVITY_RAIL_PANEL_TITLES[defaultLeftPanelId],
-    renderer: 'onlyWhenVisible',
-    position: {
-      referenceGroup: leftGroup,
-      direction: 'within',
-    },
-  });
+    const defaultLeftPanelId = getDefaultActivityRailPanelId();
+    api.addPanel({
+      id: defaultLeftPanelId,
+      component: defaultLeftPanelId,
+      title: ACTIVITY_RAIL_PANEL_TITLES[defaultLeftPanelId],
+      renderer: 'onlyWhenVisible',
+      position: {
+        referenceGroup: leftGroup,
+        direction: 'within',
+      },
+    });
+  }
 
   if (useLayoutStore.getState().isRightPanelVisible) {
     const rightGroup = api.addGroup({
@@ -312,16 +320,20 @@ export function buildDefaultLayout(api: DockviewApi): void {
 
     normalizeGroupIds(api);
     settleDockviewGroupWidths([
-      { group: leftGroup, width: defaultDockWidth(api.width) },
+      ...(leftGroup
+        ? [{ group: leftGroup, width: defaultDockWidth(api.width) }]
+        : []),
       { group: rightGroup, width: defaultSessionWidth(api.width) },
     ]);
     return;
   }
 
   normalizeGroupIds(api);
-  settleDockviewGroupWidths([
-    { group: leftGroup, width: defaultDockWidth(api.width) },
-  ]);
+  if (leftGroup) {
+    settleDockviewGroupWidths([
+      { group: leftGroup, width: defaultDockWidth(api.width) },
+    ]);
+  }
 }
 
 export function recreateWelcomeEditorGroup(
@@ -501,6 +513,7 @@ export function restoreWorkspaceDockviewPanels(
     effectiveActiveTab: string;
     effectiveWorkspaceId: string | null;
     terminalVisibleBeforeKanbanRef: { current: boolean | null };
+    includeSidebar?: boolean;
   }
 ): void {
   if (isDockviewApiDisposed(api)) {
@@ -513,8 +526,9 @@ export function restoreWorkspaceDockviewPanels(
     return;
   }
 
-  let leftGroup = getLeftGroup(api);
-  if (!leftGroup) {
+  let leftGroup =
+    options.includeSidebar === false ? undefined : getLeftGroup(api);
+  if (options.includeSidebar !== false && !leftGroup) {
     const editorGroup =
       getEditorGroups(api)[0] ?? recreateWelcomeEditorGroup(api);
     const referencePanel = editorGroup?.panels[0];
@@ -531,24 +545,26 @@ export function restoreWorkspaceDockviewPanels(
     setDockviewGroupRole(leftGroup, 'left');
   }
 
-  const hasLeftPanel = [...LEFT_PANEL_IDS].some((panelId) =>
-    api.getPanel(panelId)
-  );
-  if (!hasLeftPanel) {
-    const defaultLeftPanelId = getDefaultActivityRailPanelId();
-    api.addPanel({
-      id: defaultLeftPanelId,
-      component: defaultLeftPanelId,
-      title: ACTIVITY_RAIL_PANEL_TITLES[defaultLeftPanelId],
-      renderer: 'onlyWhenVisible',
-      position: {
-        referenceGroup: GROUP_IDS.LEFT,
-        direction: 'within',
-      },
-    });
-  }
+  if (options.includeSidebar !== false) {
+    const hasLeftPanel = [...LEFT_PANEL_IDS].some((panelId) =>
+      api.getPanel(panelId)
+    );
+    if (!hasLeftPanel) {
+      const defaultLeftPanelId = getDefaultActivityRailPanelId();
+      api.addPanel({
+        id: defaultLeftPanelId,
+        component: defaultLeftPanelId,
+        title: ACTIVITY_RAIL_PANEL_TITLES[defaultLeftPanelId],
+        renderer: 'onlyWhenVisible',
+        position: {
+          referenceGroup: GROUP_IDS.LEFT,
+          direction: 'within',
+        },
+      });
+    }
 
-  setLeftDockVisible(api, getLayoutArrangement(), true);
+    setLeftDockVisible(api, getLayoutArrangement(), true);
+  }
 
   const hasVisibleEditorPanels = getEditorGroups(api).some(
     (group) => group.api.isVisible && group.panels.length > 0

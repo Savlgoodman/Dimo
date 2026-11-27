@@ -31,7 +31,6 @@ import {
 import {
   EDITOR_GROUP_PREFIX,
   GROUP_IDS,
-  MAX_EDITOR_GROUPS,
   MIN_RIGHT_PANEL_WIDTH,
   PANEL_IDS,
   useLayoutStore,
@@ -73,8 +72,176 @@ import {
 import { applyWorkspaceZoneConstraints } from '@/utils/dockviewWorkspaceConstraints';
 import { shouldDismissEditorColumnAfterPanelRemoval } from '@/utils/lastPreviewTabLayout';
 import { closeRemovedDockviewBrowserPanel } from '@/features/host-browser/browserPanelLifetime';
+import {
+  isBoxAdjacentToWorkspaceEdge,
+  isPointInBoxEdgeBand,
+  isPointInWorkspaceEdgeTrapezoid,
+  unionBoxes,
+  type Box,
+  type Point,
+  type WorkspaceEdge,
+} from '@/lib/leftPanelSplit';
 
 export type DropTargetZone = 'editor' | 'session' | null;
+
+const WORKSPACE_EDGE_FRACTION = 0.2;
+const WORKSPACE_EDGE_ORDER: WorkspaceEdge[] = [
+  'top',
+  'bottom',
+  'left',
+  'right',
+];
+
+const WORKSPACE_GROUP_DROP_TARGET_MODEL = {
+  activationSize: { type: 'percentage' as const, value: 30 },
+  size: { type: 'percentage' as const, value: 20 },
+};
+
+type WorkspaceGroupDropTarget = {
+  setOverlayModel: (model: typeof WORKSPACE_GROUP_DROP_TARGET_MODEL) => void;
+};
+
+function configureWorkspaceGroupDropTarget(group: DockviewGroup): void {
+  if (!isEditorGroup(group) && !isSessionGroup(group)) return;
+
+  // shortcut: Dockview exposes root dndEdges but not group content settings, revisit on upgrade.
+  const model = group.model as unknown as {
+    contentContainer?: { dropTarget?: WorkspaceGroupDropTarget };
+  };
+  model.contentContainer?.dropTarget?.setOverlayModel(
+    WORKSPACE_GROUP_DROP_TARGET_MODEL
+  );
+}
+
+function configureWorkspaceGroupDropTargets(api: DockviewApi): void {
+  api.groups.forEach(configureWorkspaceGroupDropTarget);
+}
+
+function isPageBlockSplitPosition(
+  position: DockviewWillShowOverlayLocationEvent['position']
+): position is 'top' | 'bottom' | 'left' | 'right' {
+  return (
+    position === 'top' ||
+    position === 'bottom' ||
+    position === 'left' ||
+    position === 'right'
+  );
+}
+
+function canSplitWorkspacePageBlock(
+  group: DockviewGroup,
+  position: DockviewWillShowOverlayLocationEvent['position']
+): boolean {
+  if (!isPageBlockSplitPosition(position)) return true;
+  if (!isEditorGroup(group) && !isSessionGroup(group)) return true;
+
+  const isVerticalSplit = position === 'top' || position === 'bottom';
+  const currentSize = isVerticalSplit ? group.api.height : group.api.width;
+  const minimumSize = isVerticalSplit
+    ? group.minimumHeight
+    : group.minimumWidth;
+
+  return minimumSize <= 0 || currentSize + 1 >= minimumSize * 2;
+}
+
+function boxFromElement(element: HTMLElement | undefined | null): Box | null {
+  if (!element) return null;
+  const rect = element.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return null;
+  return {
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function workspaceGroupBoxes(api: DockviewApi): Box[] {
+  return api.groups
+    .filter(
+      (group) =>
+        group.api.isVisible && (isEditorGroup(group) || isSessionGroup(group))
+    )
+    .map((group) => boxFromElement(group.element))
+    .filter((box): box is Box => box !== null);
+}
+
+function workspaceBox(groups: readonly Box[]): Box | null {
+  const root =
+    typeof document === 'undefined'
+      ? null
+      : document.querySelector<HTMLElement>('.tab-bar-drop-zone');
+  return boxFromElement(root) ?? unionBoxes(groups);
+}
+
+function edgeDepthRatio(point: Point, box: Box, edge: WorkspaceEdge): number {
+  const depth =
+    edge === 'top'
+      ? point.y - box.y
+      : edge === 'bottom'
+        ? box.y + box.height - point.y
+        : edge === 'left'
+          ? point.x - box.x
+          : box.x + box.width - point.x;
+  const size = edge === 'top' || edge === 'bottom' ? box.height : box.width;
+  return Math.min(1, Math.max(0, depth / Math.max(size, 1)));
+}
+
+function workspaceEdgeMatches(
+  point: Point,
+  workspace: Box,
+  groups: readonly Box[],
+  edge: WorkspaceEdge
+): boolean {
+  const edgeGroups = groups.filter((group) =>
+    isBoxAdjacentToWorkspaceEdge(group, workspace, edge)
+  );
+  if (edgeGroups.length === 0) {
+    return isPointInBoxEdgeBand(
+      point,
+      workspace,
+      edge,
+      0,
+      WORKSPACE_EDGE_FRACTION
+    );
+  }
+  return edgeGroups.some((group) =>
+    isPointInWorkspaceEdgeTrapezoid(
+      point,
+      workspace,
+      group,
+      edge,
+      WORKSPACE_EDGE_FRACTION
+    )
+  );
+}
+
+function isWorkspaceEdgeDrop(
+  api: DockviewApi,
+  point: Point,
+  edge: WorkspaceEdge
+): boolean {
+  const groups = workspaceGroupBoxes(api);
+  const workspace = workspaceBox(groups);
+  if (!workspace) return false;
+
+  const matchingEdges = WORKSPACE_EDGE_ORDER.filter((candidate) =>
+    workspaceEdgeMatches(point, workspace, groups, candidate)
+  );
+  if (matchingEdges.length === 0) return false;
+
+  const preferredEdge = matchingEdges.reduce((best, candidate) => {
+    const bestDepth = edgeDepthRatio(point, workspace, best);
+    const candidateDepth = edgeDepthRatio(point, workspace, candidate);
+    if (candidateDepth < bestDepth) return candidate;
+    return candidateDepth === bestDepth &&
+        WORKSPACE_EDGE_ORDER.indexOf(candidate) <
+          WORKSPACE_EDGE_ORDER.indexOf(best)
+      ? candidate
+      : best;
+  });
+  return preferredEdge === edge;
+}
 
 export function registerDockviewOverlayDropGuard(
   api: DockviewApi,
@@ -96,16 +263,67 @@ export function registerDockviewOverlayDropGuard(
 
   const overlayDisposable = api.onWillShowOverlay((event) => {
     const ev: DockviewWillShowOverlayLocationEvent = event;
+    const panelData = ev.getData?.();
     if (ev.kind === 'edge') {
-      event.preventDefault();
+      const nativeEvent = ev.nativeEvent;
+      if (!nativeEvent) {
+        const sourceGroup = panelData?.groupId
+          ? api.getGroup(panelData.groupId)
+          : undefined;
+        lastDropTargetZoneRef.current =
+          sourceGroup && isSessionGroup(sourceGroup) ? 'session' : 'editor';
+        return;
+      }
+      const point: Point = {
+        x: nativeEvent.clientX,
+        y: nativeEvent.clientY,
+      };
+      const edge =
+        ev.position === 'top' ||
+        ev.position === 'bottom' ||
+        ev.position === 'left' ||
+        ev.position === 'right'
+          ? ev.position
+          : null;
+      const isWorkspaceEdge =
+        edge !== null && isWorkspaceEdgeDrop(api, point, edge);
+
+      if (!ev.group) {
+        if (!isWorkspaceEdge) {
+          lastDropTargetZoneRef.current = null;
+          event.preventDefault();
+          return;
+        }
+        const sourceGroup = panelData?.groupId
+          ? api.getGroup(panelData.groupId)
+          : undefined;
+        lastDropTargetZoneRef.current =
+          sourceGroup && isSessionGroup(sourceGroup) ? 'session' : 'editor';
+        return;
+      }
+
+      if (isWorkspaceEdge) {
+        event.preventDefault();
+        return;
+      }
+
+      const sourceGroup = panelData?.groupId
+        ? api.getGroup(panelData.groupId)
+        : undefined;
+      lastDropTargetZoneRef.current =
+        sourceGroup && isSessionGroup(sourceGroup) ? 'session' : 'editor';
       return;
     }
 
     const targetGroup = ev.group;
-    const panelData = ev.getData?.();
     const draggedPanelId = panelData?.panelId ?? ev.panel?.id;
 
     if (!targetGroup || !draggedPanelId) {
+      return;
+    }
+
+    if (!canSplitWorkspacePageBlock(targetGroup, ev.position)) {
+      event.preventDefault();
       return;
     }
 
@@ -134,26 +352,6 @@ export function registerDockviewOverlayDropGuard(
     }
 
     if (isSourceLeftPanel && !isTargetLeftGroup) {
-      event.preventDefault();
-      return;
-    }
-
-    if (
-      isTargetEditorGroup &&
-      getEditorGroups(api).length >= MAX_EDITOR_GROUPS &&
-      ev.position !== 'center' &&
-      ev.kind === 'content'
-    ) {
-      event.preventDefault();
-      return;
-    }
-
-    if (
-      isTargetSessionGroup &&
-      listSessionGroups(api.groups).length >= MAX_EDITOR_GROUPS &&
-      ev.position !== 'center' &&
-      ev.kind === 'content'
-    ) {
       event.preventDefault();
       return;
     }
@@ -254,10 +452,20 @@ export function attachDockviewWorkspaceListeners(
   if (dockviewRootEl) {
     dockviewResizeObserver.observe(dockviewRootEl);
   }
+  configureWorkspaceGroupDropTargets(api);
 
   const pointerTabDndDisposable = dockviewRootEl
     ? installDockviewPointerTabDnd(dockviewRootEl)
     : null;
+  const preventGroupDrag = (event: PointerEvent) => {
+    if (
+      event.target instanceof Element &&
+      event.target.closest('.dv-void-container')
+    ) {
+      event.preventDefault();
+    }
+  };
+  dockviewRootEl?.addEventListener('pointerdown', preventGroupDrag, true);
   const disposeSashResizeGuard = dockviewRootEl
     ? installDockviewSashResizeGuard(dockviewRootEl)
     : null;
@@ -374,6 +582,7 @@ export function attachDockviewWorkspaceListeners(
       lastDropTargetZoneRef.current = null;
       normalizeGroupIds(api);
     }
+    configureWorkspaceGroupDropTargets(api);
   });
 
   const movePanelDisposable = api.onDidMovePanel(({ panel, from }) => {
@@ -558,6 +767,7 @@ export function attachDockviewWorkspaceListeners(
       cancelAnimationFrame(resizeFrame);
     }
     pointerTabDndDisposable?.dispose();
+    dockviewRootEl?.removeEventListener('pointerdown', preventGroupDrag, true);
     disposeSashResizeGuard?.();
     dndGuardDisposable.dispose();
     removePanelDisposable.dispose();

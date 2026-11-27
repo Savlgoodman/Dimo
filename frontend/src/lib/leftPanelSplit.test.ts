@@ -7,6 +7,9 @@ import {
   ghostBoxForZone,
   hasHalfBoxOverlap,
   innerSizeAfterOuterResize,
+  isBoxAdjacentToWorkspaceEdge,
+  isPointInBoxEdgeBand,
+  isPointInWorkspaceEdgeTrapezoid,
   ratioFromSizes,
   resolveLeftPanelDropZone,
   sizesFromRatio,
@@ -31,6 +34,42 @@ describe('left panel split geometry', () => {
       ])
     ).toEqual({ x: 10, y: 10, width: 100, height: 160 });
     expect(unionBoxes([])).toBeNull();
+  });
+
+  it('separates workspace-edge and panel-split bands', () => {
+    const workspace = { x: 0, y: 0, width: 1000, height: 800 };
+    const bottomPanel = { x: 100, y: 400, width: 300, height: 400 };
+
+    expect(isBoxAdjacentToWorkspaceEdge(bottomPanel, workspace, 'bottom')).toBe(
+      true
+    );
+    expect(
+      isPointInBoxEdgeBand({ x: 200, y: 750 }, bottomPanel, 'bottom', 0, 0.2)
+    ).toBe(true);
+    expect(
+      isPointInBoxEdgeBand({ x: 200, y: 700 }, bottomPanel, 'bottom', 0.2, 0.3)
+    ).toBe(true);
+    expect(
+      isPointInBoxEdgeBand({ x: 200, y: 650 }, bottomPanel, 'bottom', 0, 0.3)
+    ).toBe(false);
+    expect(
+      isPointInWorkspaceEdgeTrapezoid(
+        { x: 50, y: 760 },
+        workspace,
+        bottomPanel,
+        'bottom',
+        0.2
+      )
+    ).toBe(true);
+    expect(
+      isPointInWorkspaceEdgeTrapezoid(
+        { x: 50, y: 700 },
+        workspace,
+        bottomPanel,
+        'bottom',
+        0.2
+      )
+    ).toBe(false);
   });
 
   it('uses the top and bottom thirds for vertical slots', () => {

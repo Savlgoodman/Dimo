@@ -114,6 +114,7 @@ import {
   ACTIVITY_RAIL_PANEL_TITLES,
   type ActivityRailItemId,
 } from '@/lib/activityRailOrder';
+import type { WorkspaceSidebarSide } from '@/lib/workspaceSidebarState';
 import {
   applyLeftDockSplitSizes,
   rebalanceLeftDockWidth,
@@ -291,6 +292,8 @@ export interface PanelActions {
   autoArrangeLayout: () => void;
   toggleLeftSidebar: () => void;
   isLeftSidebarVisible: () => boolean;
+  toggleWorkspaceSidebarSide: () => void;
+  getWorkspaceSidebarSide: () => WorkspaceSidebarSide;
   toggleRightSidebar: () => void;
   isRightSidebarVisible: () => boolean;
   hasRightSidebarPanels: () => boolean;
@@ -336,6 +339,15 @@ export interface PanelActions {
     nativeTabId?: string | null;
   }) => void;
   setDockviewApi: (api: DockviewApi | null) => void;
+  setSidebarDockviewApi: (api: DockviewApi | null) => void;
+  setWorkspaceSidebarController: (
+    controller: {
+      isVisible: () => boolean;
+      setVisible: (visible: boolean) => void;
+      getSide: () => WorkspaceSidebarSide;
+      toggleSide: () => void;
+    } | null
+  ) => void;
 }
 
 const GLOBAL_PANEL_ACTIONS_CONTEXT_KEY =
@@ -388,6 +400,8 @@ export const NOOP_PANEL_ACTIONS: PanelActions = {
   autoArrangeLayout: noopPanelAction,
   toggleLeftSidebar: noopPanelAction,
   isLeftSidebarVisible: noopFalsePanelAction,
+  toggleWorkspaceSidebarSide: noopPanelAction,
+  getWorkspaceSidebarSide: () => 'left',
   toggleRightSidebar: noopPanelAction,
   isRightSidebarVisible: noopFalsePanelAction,
   hasRightSidebarPanels: noopFalsePanelAction,
@@ -404,11 +418,26 @@ export const NOOP_PANEL_ACTIONS: PanelActions = {
   openNotes: noopPanelAction,
   openPluginPanel: noopPanelAction,
   setDockviewApi: noopPanelAction,
+  setSidebarDockviewApi: noopPanelAction,
+  setWorkspaceSidebarController: noopPanelAction,
 };
 
 export function PanelActionsProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const apiRef = useRef<DockviewApi | null>(null);
+  const sidebarApiRef = useRef<DockviewApi | null>(null);
+  const sidebarDockLifecycleRef = useRef<ReturnType<
+    typeof createLeftDockPanelLifecycle
+  > | null>(null);
+  const sidebarLayoutDisposableRef = useRef<{ dispose: () => void } | null>(
+    null
+  );
+  const workspaceSidebarControllerRef = useRef<{
+    isVisible: () => boolean;
+    setVisible: (visible: boolean) => void;
+    getSide: () => WorkspaceSidebarSide;
+    toggleSide: () => void;
+  } | null>(null);
   const [dockviewEpoch, setDockviewEpoch] = useState(0);
   const [shellNavRevision, setShellNavRevision] = useState(0);
   const offeredPluginPanelsRef = useRef(new Set<string>());
@@ -460,6 +489,43 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
   const transport = useBackendTransport();
   const canOpenWebPreview = transport.environment === 'desktop';
 
+  const setSidebarDockviewApi = useCallback((api: DockviewApi | null) => {
+    sidebarDockLifecycleRef.current?.dispose();
+    sidebarDockLifecycleRef.current = null;
+    sidebarLayoutDisposableRef.current?.dispose();
+    sidebarLayoutDisposableRef.current = null;
+    sidebarApiRef.current = api;
+    if (api) {
+      sidebarDockLifecycleRef.current = createLeftDockPanelLifecycle(api);
+      sidebarLayoutDisposableRef.current = api.onDidLayoutChange(() => {
+        setShellNavRevision((revision) => revision + 1);
+      });
+    }
+    setShellNavRevision((revision) => revision + 1);
+  }, []);
+
+  const setWorkspaceSidebarController = useCallback(
+    (
+      controller: {
+        isVisible: () => boolean;
+        setVisible: (visible: boolean) => void;
+        getSide: () => WorkspaceSidebarSide;
+        toggleSide: () => void;
+      } | null
+    ) => {
+      workspaceSidebarControllerRef.current = controller;
+      setShellNavRevision((revision) => revision + 1);
+    },
+    []
+  );
+  const toggleWorkspaceSidebarSide = useCallback(() => {
+    workspaceSidebarControllerRef.current?.toggleSide();
+    setShellNavRevision((revision) => revision + 1);
+  }, []);
+  const getWorkspaceSidebarSide = useCallback(() => {
+    void shellNavRevision;
+    return workspaceSidebarControllerRef.current?.getSide() ?? 'left';
+  }, [shellNavRevision]);
   const setDockviewApi = useCallback((api: DockviewApi | null) => {
     imagePanelRemovalDisposableRef.current?.dispose();
     imagePanelRemovalDisposableRef.current = null;
@@ -563,6 +629,12 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
       layoutDisposableRef.current?.dispose();
       layoutDisposableRef.current = null;
       clearImagePreviewSources();
+      sidebarDockLifecycleRef.current?.dispose();
+      sidebarDockLifecycleRef.current = null;
+      sidebarLayoutDisposableRef.current?.dispose();
+      sidebarLayoutDisposableRef.current = null;
+      sidebarApiRef.current = null;
+      workspaceSidebarControllerRef.current = null;
     },
     []
   );
@@ -1584,7 +1656,7 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const ensureLeftDockGroup = useCallback(() => {
-    const dockviewApi = apiRef.current;
+    const dockviewApi = sidebarApiRef.current ?? apiRef.current;
     if (!dockviewApi) return null;
 
     const existingLeftGroup = getLeftGroup(dockviewApi);
@@ -1595,18 +1667,31 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
     let leftGroup = existingLeftGroup ?? null;
     if (!leftGroup) {
       const editorHost =
-        getEditorGroups(dockviewApi)[0] ?? recreateWelcomeEditorGroup();
+        getEditorGroups(dockviewApi)[0] ??
+        (sidebarApiRef.current === dockviewApi
+          ? undefined
+          : recreateWelcomeEditorGroup());
       const referencePanel = editorHost?.panels[0];
-      if (!referencePanel) return null;
-
-      leftGroup = dockviewApi.addGroup({
-        id: GROUP_IDS.LEFT,
-        referencePanel,
-        direction: 'left',
-        hideHeader: true,
-        constraints: { minimumWidth: MIN_LEFT_PANEL_WIDTH },
-        initialWidth: savedLeftWidth > 0 ? savedLeftWidth : 200,
-      });
+      if (referencePanel) {
+        leftGroup = dockviewApi.addGroup({
+          id: GROUP_IDS.LEFT,
+          referencePanel,
+          direction: 'left',
+          hideHeader: true,
+          constraints: { minimumWidth: MIN_LEFT_PANEL_WIDTH },
+          initialWidth: savedLeftWidth > 0 ? savedLeftWidth : 200,
+        });
+      } else if (sidebarApiRef.current === dockviewApi) {
+        leftGroup = dockviewApi.addGroup({
+          id: GROUP_IDS.LEFT,
+          direction: 'right',
+          hideHeader: true,
+          constraints: { minimumWidth: MIN_LEFT_PANEL_WIDTH },
+          initialWidth: savedLeftWidth > 0 ? savedLeftWidth : 200,
+        });
+      } else {
+        return null;
+      }
 
       if (savedLeftWidth > 0) {
         try {
@@ -1622,7 +1707,7 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
 
   const finishLeftDockChange = useCallback(
     (zone?: LeftPanelDropZone) => {
-      const dockviewApi = apiRef.current;
+      const dockviewApi = sidebarApiRef.current ?? apiRef.current;
       if (!dockviewApi) return;
       applyLeftGroupHeaderHiding(dockviewApi);
       applyWorkspaceZoneConstraints(dockviewApi);
@@ -1643,7 +1728,7 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
   );
 
   const ensureRightShellNavGroup = useCallback(() => {
-    const dockviewApi = apiRef.current;
+    const dockviewApi = sidebarApiRef.current ?? apiRef.current;
     if (!dockviewApi) return null;
 
     const existingRight = listLeftDockGroups(dockviewApi.groups).find(
@@ -1668,16 +1753,25 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
       recreateWelcomeEditorGroup();
 
     const referencePanel = rightmostStage?.panels[0];
-    if (!referencePanel) return null;
-
-    const rightShellGroup = dockviewApi.addGroup({
-      id: getNextLeftGroupId(dockviewApi),
-      referencePanel,
-      direction: 'right',
-      hideHeader: true,
-      constraints: { minimumWidth: MIN_LEFT_PANEL_WIDTH },
-      initialWidth: 220,
-    });
+    const rightShellGroup = referencePanel
+      ? dockviewApi.addGroup({
+          id: getNextLeftGroupId(dockviewApi),
+          referencePanel,
+          direction: 'right',
+          hideHeader: true,
+          constraints: { minimumWidth: MIN_LEFT_PANEL_WIDTH },
+          initialWidth: 220,
+        })
+      : sidebarApiRef.current === dockviewApi
+        ? dockviewApi.addGroup({
+            id: getNextLeftGroupId(dockviewApi),
+            direction: 'right',
+            hideHeader: true,
+            constraints: { minimumWidth: MIN_LEFT_PANEL_WIDTH },
+            initialWidth: 220,
+          })
+        : null;
+    if (!rightShellGroup) return null;
     rightShellGroup.element?.setAttribute('data-left-dock', 'true');
     rightShellGroup.element?.setAttribute('data-shell-nav-side', 'right');
     rightShellGroup.api.setVisible(true);
@@ -1698,7 +1792,7 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
         targetPanelId?: ActivityRailItemId;
       }
     ) => {
-      const dockviewApi = apiRef.current;
+      const dockviewApi = sidebarApiRef.current ?? apiRef.current;
       if (!dockviewApi) return;
 
       const side = options?.side ?? 'left';
@@ -1961,7 +2055,7 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
 
   const swapLeftDockPanels = useCallback(
     (panelA: ActivityRailItemId, panelB: ActivityRailItemId) => {
-      const dockviewApi = apiRef.current;
+      const dockviewApi = sidebarApiRef.current ?? apiRef.current;
       if (!dockviewApi) return false;
       applyingLeftSplitRef.current = true;
       const swapped = performSwapLeftDockPanels(dockviewApi, panelA, panelB);
@@ -1978,7 +2072,7 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
 
   const resolveShellNavDropTarget = useCallback(
     (point: Point, sourcePanelId?: ActivityRailItemId) => {
-      const dockviewApi = apiRef.current;
+      const dockviewApi = sidebarApiRef.current ?? apiRef.current;
       if (!dockviewApi) return null;
       return readShellNavDropTarget(dockviewApi, point, sourcePanelId);
     },
@@ -1986,25 +2080,25 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
   );
 
   const measureShellNavPanels = useCallback(() => {
-    const dockviewApi = apiRef.current;
+    const dockviewApi = sidebarApiRef.current ?? apiRef.current;
     if (!dockviewApi) return [];
     return readShellNavPanels(dockviewApi);
   }, []);
 
   const measureLeftDock = useCallback(() => {
-    const dockviewApi = apiRef.current;
+    const dockviewApi = sidebarApiRef.current ?? apiRef.current;
     if (!dockviewApi) return null;
     return measureLeftDockBox(dockviewApi);
   }, []);
 
   const isLeftDockSplit = useCallback(() => {
-    const dockviewApi = apiRef.current;
+    const dockviewApi = sidebarApiRef.current ?? apiRef.current;
     if (!dockviewApi) return false;
     return readLeftDockSplit(dockviewApi);
   }, []);
 
   const unsplitLeftDock = useCallback(() => {
-    const dockviewApi = apiRef.current;
+    const dockviewApi = sidebarApiRef.current ?? apiRef.current;
     if (!dockviewApi) return;
     if (!unsplitLeftDockKeepLeading(dockviewApi)) return;
     finishLeftDockChange();
@@ -2012,7 +2106,8 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
 
   const showOnlyLeftDockPanel = useCallback(
     (panelId: ActivityRailItemId) => {
-      const dockviewApi = apiRef.current;
+      workspaceSidebarControllerRef.current?.setVisible(true);
+      const dockviewApi = sidebarApiRef.current ?? apiRef.current;
       if (!dockviewApi) return;
 
       const title = ACTIVITY_RAIL_PANEL_TITLES[panelId];
@@ -2026,8 +2121,9 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
       const leftGroup =
         (existing?.group.api.isVisible && !isRightShellNavGroup(existing.group)
           ? existing.group
-          : leftDockLifecycleRef.current?.oldestVisiblePanel()?.group) ??
-        ensureLeftDockGroup();
+          : (
+              sidebarDockLifecycleRef.current ?? leftDockLifecycleRef.current
+            )?.oldestVisiblePanel()?.group) ?? ensureLeftDockGroup();
       if (!leftGroup) return;
       const isNewSlot = !sideWidths.some(({ group }) => group === leftGroup);
 
@@ -2080,7 +2176,7 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
 
   const toggleLeftDockPanel = useCallback(
     (panelId: ActivityRailItemId) => {
-      const dockviewApi = apiRef.current;
+      const dockviewApi = sidebarApiRef.current ?? apiRef.current;
       if (!dockviewApi) return;
 
       const existing = dockviewApi.getPanel(panelId);
@@ -2111,7 +2207,9 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
 
   const isLeftSidebarVisible = useCallback(() => {
     void shellNavRevision;
-    const dockviewApi = apiRef.current;
+    const controller = workspaceSidebarControllerRef.current;
+    if (controller) return controller.isVisible();
+    const dockviewApi = sidebarApiRef.current ?? apiRef.current;
     if (!dockviewApi) return false;
     const leftGroups = listLeftShellNavGroups(dockviewApi.groups).filter(
       (group) => group.panels.length > 0
@@ -2120,7 +2218,14 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
   }, [shellNavRevision]);
 
   const toggleLeftSidebar = useCallback(() => {
-    const dockviewApi = apiRef.current;
+    const controller = workspaceSidebarControllerRef.current;
+    if (controller) {
+      const visible = !controller.isVisible();
+      controller.setVisible(visible);
+      setFileTreeVisible(visible);
+      return;
+    }
+    const dockviewApi = sidebarApiRef.current ?? apiRef.current;
     if (!dockviewApi) return;
     const leftGroups = listLeftShellNavGroups(dockviewApi.groups).filter(
       (group) => group.panels.length > 0
@@ -2137,7 +2242,7 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
 
   const hasRightSidebarPanels = useCallback(() => {
     void shellNavRevision;
-    const dockviewApi = apiRef.current;
+    const dockviewApi = sidebarApiRef.current ?? apiRef.current;
     if (!dockviewApi) return false;
     return listRightShellNavGroups(dockviewApi.groups).some(
       (group) => group.panels.length > 0
@@ -2146,7 +2251,7 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
 
   const isRightSidebarVisible = useCallback(() => {
     void shellNavRevision;
-    const dockviewApi = apiRef.current;
+    const dockviewApi = sidebarApiRef.current ?? apiRef.current;
     if (!dockviewApi) return false;
     const rightGroups = listRightShellNavGroups(dockviewApi.groups).filter(
       (group) => group.panels.length > 0
@@ -2155,7 +2260,7 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
   }, [shellNavRevision]);
 
   const toggleRightSidebar = useCallback(() => {
-    const dockviewApi = apiRef.current;
+    const dockviewApi = sidebarApiRef.current ?? apiRef.current;
     if (!dockviewApi) return;
     const rightGroups = listRightShellNavGroups(dockviewApi.groups).filter(
       (group) => group.panels.length > 0
@@ -3071,6 +3176,8 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
       autoArrangeLayout,
       toggleLeftSidebar,
       isLeftSidebarVisible,
+      toggleWorkspaceSidebarSide,
+      getWorkspaceSidebarSide,
       toggleRightSidebar,
       isRightSidebarVisible,
       hasRightSidebarPanels,
@@ -3087,6 +3194,8 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
       openNotes,
       openPluginPanel,
       setDockviewApi,
+      setSidebarDockviewApi,
+      setWorkspaceSidebarController,
     };
   }, [
     canOpenPanelInNewEditorGroup,
@@ -3117,6 +3226,8 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
     openSessionTab,
     openPanelInNewEditorGroup,
     setDockviewApi,
+    setSidebarDockviewApi,
+    setWorkspaceSidebarController,
     splitActiveEditor,
     toggleEditorArea,
     toggleFileTree,
@@ -3129,6 +3240,8 @@ export function PanelActionsProvider({ children }: { children: ReactNode }) {
     autoArrangeLayout,
     toggleLeftSidebar,
     isLeftSidebarVisible,
+    toggleWorkspaceSidebarSide,
+    getWorkspaceSidebarSide,
     toggleRightSidebar,
     isRightSidebarVisible,
     hasRightSidebarPanels,

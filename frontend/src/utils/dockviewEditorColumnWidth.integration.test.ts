@@ -531,11 +531,11 @@ interface DockviewHost {
   };
   _onWillShowOverlay?: {
     fire: (event: {
-      kind: 'content';
-      group: ReturnType<DockviewApi['getGroup']>;
+      kind: 'content' | 'edge';
+      group?: ReturnType<DockviewApi['getGroup']>;
       position: 'left' | 'right' | 'top' | 'bottom' | 'center';
       panel?: ReturnType<DockviewApi['getPanel']>;
-      getData: () => { groupId: string; panelId: string };
+      getData: () => { groupId: string; panelId: string } | undefined;
       preventDefault: () => void;
     }) => void;
   };
@@ -912,6 +912,151 @@ describe('tab split column widths', () => {
     expectNear(s2.group.api.width, 320);
 
     rebalance.dispose();
+    api.dispose();
+  });
+
+  it('keeps workspace edge drops eligible for a new page block', () => {
+    const api = createApi(1600);
+    const lastDropTargetZoneRef: { current: DropTargetZone } = {
+      current: null,
+    };
+    const disposable = registerDockviewOverlayDropGuard(
+      api,
+      lastDropTargetZoneRef
+    );
+    let prevented = false;
+
+    dockviewHost(api)._onWillShowOverlay?.fire({
+      kind: 'edge',
+      group: undefined,
+      position: 'right',
+      panel: undefined,
+      getData: () => ({ groupId: 'group-editor-1', panelId: 'welcome' }),
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+
+    expect(lastDropTargetZoneRef.current).toBe('editor');
+    expect(prevented).toBe(false);
+
+    disposable.dispose();
+    api.dispose();
+  });
+
+  it('hides a split overlay when the target page block cannot fit two minimum heights', () => {
+    const api = createApi(1600);
+    const panel = api.addPanel({
+      id: 'minimum-height-panel',
+      component: 'preview',
+      title: 'Minimum height',
+    });
+    (panel.group as { id: string }).id = 'group-editor-1';
+    syncDockviewGroupRegistry(api);
+    panel.group.api.setConstraints({ minimumHeight: 401 });
+
+    const lastDropTargetZoneRef: { current: DropTargetZone } = {
+      current: null,
+    };
+    const disposable = registerDockviewOverlayDropGuard(
+      api,
+      lastDropTargetZoneRef
+    );
+    let prevented = false;
+
+    dockviewHost(api)._onWillShowOverlay?.fire({
+      kind: 'content',
+      group: panel.group,
+      position: 'bottom',
+      panel,
+      getData: () => ({
+        groupId: panel.group.id,
+        panelId: panel.id,
+      }),
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+
+    expect(prevented).toBe(true);
+
+    disposable.dispose();
+    api.dispose();
+  });
+
+  it('hides a split overlay when the target page block cannot fit two minimum widths', () => {
+    const api = createApi(1600);
+    const panel = api.addPanel({
+      id: 'minimum-width-panel',
+      component: 'preview',
+      title: 'Minimum width',
+    });
+    (panel.group as { id: string }).id = 'group-editor-1';
+    syncDockviewGroupRegistry(api);
+    panel.group.api.setConstraints({ minimumWidth: 801 });
+
+    const lastDropTargetZoneRef: { current: DropTargetZone } = {
+      current: null,
+    };
+    const disposable = registerDockviewOverlayDropGuard(
+      api,
+      lastDropTargetZoneRef
+    );
+    let prevented = false;
+
+    dockviewHost(api)._onWillShowOverlay?.fire({
+      kind: 'content',
+      group: panel.group,
+      position: 'right',
+      panel,
+      getData: () => ({
+        groupId: panel.group.id,
+        panelId: panel.id,
+      }),
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+
+    expect(prevented).toBe(true);
+
+    disposable.dispose();
+    api.dispose();
+  });
+
+  it('does not stop splitting after four editor page blocks', () => {
+    const api = createApi(1600);
+    buildColumns(api);
+    const targetGroup = visibleEditors(api)[0];
+    const targetPanel = targetGroup.activePanel;
+    if (!targetPanel) throw new Error('Expected an active editor panel');
+
+    const lastDropTargetZoneRef: { current: DropTargetZone } = {
+      current: null,
+    };
+    const disposable = registerDockviewOverlayDropGuard(
+      api,
+      lastDropTargetZoneRef
+    );
+    let prevented = false;
+
+    dockviewHost(api)._onWillShowOverlay?.fire({
+      kind: 'content',
+      group: targetGroup,
+      position: 'right',
+      panel: targetPanel,
+      getData: () => ({
+        groupId: targetGroup.id,
+        panelId: targetPanel.id,
+      }),
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+
+    expect(prevented).toBe(false);
+
+    disposable.dispose();
     api.dispose();
   });
 

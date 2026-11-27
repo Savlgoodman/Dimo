@@ -384,7 +384,9 @@
     "search": "搜索 (Ctrl+Shift+F)",
     "activityRailAria": "工作区面板",
     "reorderHint": "拖动以调整顺序",
-    "unsplitLeftDock": "取消分割"
+    "unsplitLeftDock": "取消分割",
+    "moveSidebarRight": "将侧边栏移到右侧",
+    "moveSidebarLeft": "将侧边栏移到左侧"
   },
   "workspaceSessionList": {
     "title": "会话列表",

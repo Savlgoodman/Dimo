@@ -73,6 +73,83 @@ export function hasHalfBoxOverlap(a: Box, b: Box, threshold = 0.5): boolean {
   return widthRatio > threshold && heightRatio > threshold;
 }
 
+export type WorkspaceEdge = 'top' | 'bottom' | 'left' | 'right';
+
+export function isBoxAdjacentToWorkspaceEdge(
+  box: Box,
+  workspace: Box,
+  edge: WorkspaceEdge,
+  tolerance = 6
+): boolean {
+  switch (edge) {
+    case 'top':
+      return Math.abs(box.y - workspace.y) <= tolerance;
+    case 'bottom':
+      return Math.abs(box.y + box.height - (workspace.y + workspace.height)) <= tolerance;
+    case 'left':
+      return Math.abs(box.x - workspace.x) <= tolerance;
+    case 'right':
+      return Math.abs(box.x + box.width - (workspace.x + workspace.width)) <= tolerance;
+  }
+}
+
+export function isPointInBoxEdgeBand(
+  point: Point,
+  box: Box,
+  edge: WorkspaceEdge,
+  fromFraction: number,
+  toFraction: number
+): boolean {
+  if (!boxContains(box, point)) return false;
+  const fraction =
+    edge === 'top'
+      ? (point.y - box.y) / box.height
+      : edge === 'bottom'
+        ? (box.y + box.height - point.y) / box.height
+        : edge === 'left'
+          ? (point.x - box.x) / box.width
+          : (box.x + box.width - point.x) / box.width;
+  return fraction >= fromFraction && fraction <= toFraction;
+}
+
+export function isPointInWorkspaceEdgeTrapezoid(
+  point: Point,
+  workspace: Box,
+  edgeBox: Box,
+  edge: WorkspaceEdge,
+  depthFraction: number
+): boolean {
+  if (!boxContains(workspace, point)) return false;
+  const isHorizontal = edge === 'top' || edge === 'bottom';
+  const depthSize =
+    (isHorizontal ? edgeBox.height : edgeBox.width) * depthFraction;
+  if (depthSize < 1) return false;
+
+  const depth =
+    edge === 'top'
+      ? point.y - workspace.y
+      : edge === 'bottom'
+        ? workspace.y + workspace.height - point.y
+        : edge === 'left'
+          ? point.x - workspace.x
+          : workspace.x + workspace.width - point.x;
+  if (depth < -1 || depth > depthSize + 1) return false;
+
+  const progress = Math.min(1, Math.max(0, depth / depthSize));
+  const workspaceStart = isHorizontal ? workspace.x : workspace.y;
+  const workspaceEnd = isHorizontal
+    ? workspace.x + workspace.width
+    : workspace.y + workspace.height;
+  const edgeStart = isHorizontal ? edgeBox.x : edgeBox.y;
+  const edgeEnd = isHorizontal
+    ? edgeBox.x + edgeBox.width
+    : edgeBox.y + edgeBox.height;
+  const start = workspaceStart + (edgeStart - workspaceStart) * progress;
+  const end = workspaceEnd - (workspaceEnd - edgeEnd) * progress;
+  const tangent = isHorizontal ? point.x : point.y;
+  return tangent >= start - 1 && tangent <= end + 1;
+}
+
 export function resolveLeftPanelDropZone(
   point: Point,
   box: Box

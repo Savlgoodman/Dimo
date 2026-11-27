@@ -1,6 +1,7 @@
 import type { DockviewApi } from 'dockview-react';
 import { GROUP_IDS, MIN_RIGHT_PANEL_WIDTH } from '@/stores/useLayoutStore';
 import {
+  isEditorGroup,
   isLeftGroup,
   isSessionGroup,
   listLeftDockGroups,
@@ -39,4 +40,13 @@ export function applyWorkspaceZoneConstraints(
     api.getGroup(GROUP_IDS.RIGHT) ??
     api.groups.find((group) => isSessionGroup(group));
   rightGroup?.api.setConstraints({ minimumWidth: minimumRightWidth });
+
+  const minimumEditorWidth = Math.max(120, Math.floor(availableWidth / 5));
+  const minimumEditorHeight = Math.max(120, Math.floor(api.height / 4));
+  for (const group of api.groups.filter(isEditorGroup)) {
+    group.api.setConstraints({
+      minimumWidth: minimumEditorWidth,
+      minimumHeight: minimumEditorHeight,
+    });
+  }
 }

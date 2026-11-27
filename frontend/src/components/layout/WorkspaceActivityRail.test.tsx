@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => {
     toggleSearchPanel: vi.fn(),
     toggleSessionList: vi.fn(),
     toggleBotsPanel: vi.fn(),
+    toggleWorkspaceSidebarSide: vi.fn(),
+    getWorkspaceSidebarSide: vi.fn(() => 'left'),
     placeLeftDockPanel: vi.fn(),
     swapLeftDockPanels: vi.fn(),
     resolveShellNavDropTarget: vi.fn(),
@@ -71,6 +73,8 @@ vi.mock('@/contexts/PanelActionsContext', () => ({
     toggleSearchPanel: mocks.toggleSearchPanel,
     toggleSessionList: mocks.toggleSessionList,
     toggleBotsPanel: mocks.toggleBotsPanel,
+    toggleWorkspaceSidebarSide: mocks.toggleWorkspaceSidebarSide,
+    getWorkspaceSidebarSide: mocks.getWorkspaceSidebarSide,
     placeLeftDockPanel: mocks.placeLeftDockPanel,
     swapLeftDockPanels: mocks.swapLeftDockPanels,
     resolveShellNavDropTarget: mocks.resolveShellNavDropTarget,
@@ -90,6 +94,8 @@ describe('WorkspaceActivityRail', () => {
     mocks.toggleSearchPanel.mockReset();
     mocks.toggleSessionList.mockReset();
     mocks.toggleBotsPanel.mockReset();
+    mocks.toggleWorkspaceSidebarSide.mockReset();
+    mocks.getWorkspaceSidebarSide.mockReturnValue('left');
     mocks.placeLeftDockPanel.mockReset();
     mocks.swapLeftDockPanels.mockReset();
     mocks.resolveShellNavDropTarget.mockReset();
@@ -269,38 +275,16 @@ describe('WorkspaceActivityRail', () => {
     }
   });
 
-  it('drags a Zone A panel handle with floating + ghost preview and auto-swaps on >50% overlap', () => {
-    const fileTreeBox = { x: 40, y: 80, width: 200, height: 600 };
-    const sessionListBox = { x: 240, y: 80, width: 280, height: 600 };
-    mocks.measureShellNavPanels.mockReturnValue([
-      { panelId: PANEL_IDS.FILE_TREE, side: 'left', box: fileTreeBox },
-      { panelId: PANEL_IDS.SESSION_LIST, side: 'left', box: sessionListBox },
-    ]);
-    mocks.swapLeftDockPanels.mockReturnValue(true);
+  it('renders the sidebar placement button at the panel toolbar size', () => {
+    render(<ShellNavPanelDragHandle panelId={PANEL_IDS.BOTS} />);
 
-    render(<ShellNavPanelDragHandle panelId={PANEL_IDS.FILE_TREE} />);
-
-    const handle = screen.getByTestId(
-      `shell-nav-drag-handle-${PANEL_IDS.FILE_TREE}`
+    const button = screen.getByTestId(
+      `shell-nav-side-toggle-${PANEL_IDS.BOTS}`
     );
-    fireEvent.pointerDown(handle, { button: 0, clientX: 220, clientY: 95 });
+    expect(button).toHaveAttribute('aria-label', '将侧边栏移到右侧');
+    expect(button).toHaveClass('h-5', 'w-5');
 
-    // Move 60px right (30% overlap -> shows swap ghost preview, no auto-swap yet)
-    fireEvent.pointerMove(window, { clientX: 280, clientY: 95 });
-    expect(
-      screen.getByTestId(`shell-nav-floating-preview-${PANEL_IDS.FILE_TREE}`)
-    ).toBeInTheDocument();
-    expect(screen.getByTestId('shell-nav-drop-ghost')).toBeInTheDocument();
-    expect(mocks.swapLeftDockPanels).not.toHaveBeenCalled();
-
-    // Move 120px right (60% width & 100% height overlap -> triggers automatic swap)
-    fireEvent.pointerMove(window, { clientX: 340, clientY: 95 });
-    expect(mocks.swapLeftDockPanels).toHaveBeenCalledWith(
-      PANEL_IDS.FILE_TREE,
-      PANEL_IDS.SESSION_LIST
-    );
-
-    fireEvent.pointerUp(window);
-    expect(mocks.placeLeftDockPanel).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    expect(mocks.toggleWorkspaceSidebarSide).toHaveBeenCalledOnce();
   });
 });

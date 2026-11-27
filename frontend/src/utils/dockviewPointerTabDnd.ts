@@ -207,6 +207,20 @@ function resolveDropTargetAtPoint(
     }
   }
 
+  const dropTargetOverlay = hit.closest(
+    '.dv-drop-target-anchor, .dv-drop-target-dropzone'
+  );
+  if (
+    dropTargetOverlay instanceof HTMLElement &&
+    rootElement.contains(dropTargetOverlay)
+  ) {
+    return {
+      dropzone: dropTargetOverlay,
+      clientX,
+      clientY,
+    };
+  }
+
   const renderOverlay = hit.closest('.dv-render-overlay');
   if (
     renderOverlay instanceof HTMLElement &&

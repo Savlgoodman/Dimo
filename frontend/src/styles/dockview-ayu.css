@@ -87,6 +87,121 @@
   background: var(--surface-topbar) !important;
 }
 
+.workspace-layout-row {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.workspace-sidebar {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-topbar);
+}
+
+.workspace-sidebar.is-hidden {
+  pointer-events: none;
+}
+
+.workspace-sidebar-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.workspace-sidebar-dockview {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.workspace-sidebar-sash {
+  position: relative;
+  z-index: 1000;
+  width: 11px;
+  flex: 0 0 11px;
+  align-self: stretch;
+  cursor: ew-resize;
+  overflow: visible;
+  background: transparent;
+  touch-action: none;
+  user-select: none;
+}
+
+.workspace-sidebar-sash::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 1px;
+  border: 0;
+  background-color: var(--workspace-divider-color, var(--dv-sash-color));
+  transition: background-color 0.15s ease;
+}
+
+.workspace-sidebar-sash::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 21px;
+  transform: translate(-50%, -50%);
+  border: 0;
+  border-radius: 999px;
+  opacity: 0;
+  background-color: transparent;
+  box-shadow: none;
+  transition:
+    opacity 0.15s ease,
+    background-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.workspace-sidebar-sash:hover::before,
+.workspace-sidebar-sash:active::before {
+  background-color: var(--workspace-divider-hover, var(--dv-active-sash-color));
+}
+
+.workspace-sidebar-sash:hover::after,
+.workspace-sidebar-sash:active::after {
+  opacity: 1;
+  transform: translate(-50%, -50%) scaleX(1.35);
+  background-color: var(--workspace-divider-hover, var(--dv-active-sash-color));
+  box-shadow: 0 0 0 1px hsl(var(--background) / 0.88);
+}
+
+.workspace-sidebar-body-right .workspace-sidebar-dockview {
+  order: 1;
+}
+
+.workspace-sidebar-body-right .workspace-activity-rail {
+  order: 2;
+}
+
+.workspace-sidebar-sash[data-workspace-sidebar-visible='false'] {
+  width: 0;
+  flex-basis: 0;
+  pointer-events: none;
+}
+
+.workspace-stage-host-sidebar-left {
+  overflow: hidden;
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.workspace-stage-host-sidebar-right {
+  overflow: hidden;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.workspace-stage-host-sidebar-none {
+  overflow: hidden;
+  border-radius: var(--radius);
+}
+
 .workspace-divider-bottom {
   border-bottom: 0 !important;
 }

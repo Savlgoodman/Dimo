@@ -384,7 +384,9 @@
     "search": "Search (Ctrl+Shift+F)",
     "activityRailAria": "Workspace panels",
     "reorderHint": "Drag to reorder",
-    "unsplitLeftDock": "Unsplit"
+    "unsplitLeftDock": "Unsplit",
+    "moveSidebarRight": "Move sidebar right",
+    "moveSidebarLeft": "Move sidebar left"
   },
   "workspaceSessionList": {
     "title": "Sessions",
